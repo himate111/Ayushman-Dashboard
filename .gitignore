@@ -1,0 +1,16 @@
+**/node_modules/
+**/bin/
+**/obj/
+**/dist/
+
+**/.env
+**/.env.*
+**/appsettings.Development.json
+
+*.bak
+*.mdf
+*.ldf
+*.log
+
+.vs/
+.vscode/
