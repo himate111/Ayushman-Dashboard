@@ -12,6 +12,7 @@ using CsvHelper;
 using CsvHelper.Configuration;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Data.SqlClient;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using BeneficiaryGrievance.Api.Data.Inbound;
 using BeneficiaryGrievance.Api.DTOs.Inbound;
@@ -22,11 +23,16 @@ namespace BeneficiaryGrievance.Api.Services.Inbound
     {
         private readonly IInboundImportRepository _repository;
         private readonly ILogger<InboundImportService> _logger;
+        private readonly IMemoryCache? _cache;
 
-        public InboundImportService(IInboundImportRepository repository, ILogger<InboundImportService> logger)
+        public InboundImportService(
+            IInboundImportRepository repository,
+            ILogger<InboundImportService> logger,
+            IMemoryCache? cache = null)
         {
             _repository = repository;
             _logger = logger;
+            _cache = cache;
         }
 
         private class ParsedCallRow
@@ -233,6 +239,9 @@ namespace BeneficiaryGrievance.Api.Services.Inbound
             await conn.OpenAsync();
             using var trans = conn.BeginTransaction();
 
+            long startId = 0;
+            long endId = 0;
+
             try
             {
                 if (approvedRowsToInsert.Count > 0)
@@ -269,6 +278,9 @@ namespace BeneficiaryGrievance.Api.Services.Inbound
                         ));
                     }
 
+                    startId = rawRecords.First().Id;
+                    endId = rawRecords.Last().Id;
+
                     // Bulk copy in chunks of 1000
                     int chunkSize = 1000;
                     for (int i = 0; i < rawRecords.Count; i += chunkSize)
@@ -286,7 +298,7 @@ namespace BeneficiaryGrievance.Api.Services.Inbound
 
                 sw.Stop();
                 string status = (approvedRowsToInsert.Count == 0 && errorRecords.Count > 0) ? "Failed" : "Completed";
-                string notes = $"Ingested {parsedRows.Count} rows: {newCount} added, {duplicateCount} duplicates skipped, {errorRecords.Count} errors rejected in {sw.ElapsedMilliseconds}ms.";
+                string notes = $"Ingested {parsedRows.Count} rows: {newCount} added (Call IDs {startId} to {endId}), {duplicateCount} duplicates skipped, {errorRecords.Count} errors rejected in {sw.ElapsedMilliseconds}ms.";
 
                 await _repository.UpdateBatchStatusAsync(
                     conn,
@@ -301,6 +313,13 @@ namespace BeneficiaryGrievance.Api.Services.Inbound
                 );
 
                 trans.Commit();
+
+                // Invalidate cached filter options so newly imported records are immediately visible in dropdown filters
+                try
+                {
+                    _cache?.Remove("InboundFilterOptions");
+                }
+                catch { }
 
                 return new InboundImportExecuteResultDto
                 {
@@ -418,7 +437,7 @@ namespace BeneficiaryGrievance.Api.Services.Inbound
 
             // Verify essential headers
             bool hasPhoneCol = HasAnyColumn(colMap, "called_no", "calledno", "phone", "phonenumber", "caller", "caller_no", "cli", "ani");
-            bool hasTimeCol = HasAnyColumn(colMap, "call_time", "calltime", "arrival_time", "datetime", "call_date", "start_time");
+            bool hasTimeCol = HasAnyColumn(colMap, "call_time", "calltime", "call_start_time", "callstarttime", "start_time", "starttime", "arrival_time", "datetime", "call_date");
 
             if (!hasPhoneCol || !hasTimeCol)
             {
@@ -447,7 +466,8 @@ namespace BeneficiaryGrievance.Api.Services.Inbound
             {
                 HeaderValidated = null,
                 MissingFieldFound = null,
-                BadDataFound = null
+                BadDataFound = null,
+                PrepareHeaderForMatch = args => args.Header.Trim().Replace(" ", "").Replace("_", "").ToLowerInvariant()
             };
 
             using var csv = new CsvReader(reader, config);
@@ -466,7 +486,7 @@ namespace BeneficiaryGrievance.Api.Services.Inbound
             }
 
             bool hasPhoneCol = headers.Any(h => MatchesHeader(h, "called_no", "calledno", "phone", "phonenumber", "caller", "caller_no", "cli", "ani"));
-            bool hasTimeCol = headers.Any(h => MatchesHeader(h, "call_time", "calltime", "arrival_time", "datetime", "call_date", "start_time"));
+            bool hasTimeCol = headers.Any(h => MatchesHeader(h, "call_time", "calltime", "call_start_time", "callstarttime", "start_time", "starttime", "arrival_time", "datetime", "call_date"));
 
             if (!hasPhoneCol || !hasTimeCol)
             {
@@ -501,7 +521,7 @@ namespace BeneficiaryGrievance.Api.Services.Inbound
             parsed.CalledNo = phoneStr;
 
             // Call Time
-            string timeStr = CleanCell(GetExcelVal(row, colMap, "call_time", "calltime", "arrival_time", "datetime", "call_date", "start_time"));
+            string timeStr = CleanCell(GetExcelVal(row, colMap, "call_time", "calltime", "call_start_time", "callstarttime", "start_time", "starttime", "arrival_time", "datetime", "call_date"));
             if (!TryParseFlexibleDateTime(timeStr, out var callTime))
             {
                 parsed.IsValid = false;
@@ -522,13 +542,13 @@ namespace BeneficiaryGrievance.Api.Services.Inbound
             parsed.GroupName = CleanCell(GetExcelVal(row, colMap, "group_name", "group", "skill_group", "campaign")) ?? "Sachis Inbound-805";
 
             // Durations
-            parsed.RingDuration = ParseDuration(GetExcelVal(row, colMap, "ring_duration", "ring", "ring_time"));
-            parsed.IvrDuration = ParseDuration(GetExcelVal(row, colMap, "ivr_duration", "ivr", "ivr_time"));
-            parsed.QueueDuration = ParseDuration(GetExcelVal(row, colMap, "queue_duration", "queue", "queue_wait", "wait_time"));
-            parsed.AgentDuration = ParseDuration(GetExcelVal(row, colMap, "agent_duration", "agent_time", "talk_time", "duration"));
-            parsed.HoldDuration = ParseDuration(GetExcelVal(row, colMap, "hold_duration", "hold", "hold_time"));
+            parsed.RingDuration = ParseDuration(GetExcelVal(row, colMap, "ring_duration", "ring", "ring_time", "ring_durn", "ringdurn"));
+            parsed.IvrDuration = ParseDuration(GetExcelVal(row, colMap, "ivr_duration", "ivr", "ivr_time", "ivr_dur", "ivrdur"));
+            parsed.QueueDuration = ParseDuration(GetExcelVal(row, colMap, "queue_duration", "queue", "queue_wait", "wait_time", "queue_durn", "queuedurn"));
+            parsed.AgentDuration = ParseDuration(GetExcelVal(row, colMap, "agent_duration", "agent_time", "talk_time", "duration", "agent_durn", "agentdurn"));
+            parsed.HoldDuration = ParseDuration(GetExcelVal(row, colMap, "hold_duration", "hold", "hold_time", "hold_durn", "holddurn"));
 
-            string totalDurStr = GetExcelVal(row, colMap, "total_duration", "total_time", "call_duration");
+            string totalDurStr = GetExcelVal(row, colMap, "total_duration", "total_time", "call_duration", "durn");
             if (!string.IsNullOrWhiteSpace(totalDurStr))
             {
                 parsed.TotalDuration = ParseDuration(totalDurStr);
@@ -539,11 +559,11 @@ namespace BeneficiaryGrievance.Api.Services.Inbound
             }
 
             // Call End
-            string callEndRaw = CleanCell(GetExcelVal(row, colMap, "call_end", "callend", "termination_point", "end_point", "call_status"));
+            string callEndRaw = CleanCell(GetExcelVal(row, colMap, "call_end", "callend", "termination_point", "end_point", "call_status", "call_end_at", "callendat"));
             parsed.CallEnd = NormalizeCallEnd(callEndRaw, parsed.AgentDuration);
 
             // Agent ID
-            string agentRaw = CleanCell(GetExcelVal(row, colMap, "agent_id", "agent", "staff_id", "executive_id"));
+            string agentRaw = CleanCell(GetExcelVal(row, colMap, "agent_id", "agent", "staff_id", "executive_id", "agentid"));
             parsed.AgentId = string.IsNullOrWhiteSpace(agentRaw) || parsed.CallEnd != "Agent" ? "-" : agentRaw;
 
             // Call Type & ACD
@@ -574,7 +594,7 @@ namespace BeneficiaryGrievance.Api.Services.Inbound
             parsed.CalledNo = phoneStr;
 
             // Call Time
-            string timeStr = CleanCell(GetCsvVal(csv, "call_time", "calltime", "arrival_time", "datetime", "call_date", "start_time"));
+            string timeStr = CleanCell(GetCsvVal(csv, "call_time", "calltime", "call_start_time", "callstarttime", "start_time", "starttime", "arrival_time", "datetime", "call_date"));
             if (!TryParseFlexibleDateTime(timeStr, out var callTime))
             {
                 parsed.IsValid = false;
@@ -595,13 +615,13 @@ namespace BeneficiaryGrievance.Api.Services.Inbound
             parsed.GroupName = CleanCell(GetCsvVal(csv, "group_name", "group", "skill_group", "campaign")) ?? "Sachis Inbound-805";
 
             // Durations
-            parsed.RingDuration = ParseDuration(GetCsvVal(csv, "ring_duration", "ring", "ring_time"));
-            parsed.IvrDuration = ParseDuration(GetCsvVal(csv, "ivr_duration", "ivr", "ivr_time"));
-            parsed.QueueDuration = ParseDuration(GetCsvVal(csv, "queue_duration", "queue", "queue_wait", "wait_time"));
-            parsed.AgentDuration = ParseDuration(GetCsvVal(csv, "agent_duration", "agent_time", "talk_time", "duration"));
-            parsed.HoldDuration = ParseDuration(GetCsvVal(csv, "hold_duration", "hold", "hold_time"));
+            parsed.RingDuration = ParseDuration(GetCsvVal(csv, "ring_duration", "ring", "ring_time", "ring_durn", "ringdurn"));
+            parsed.IvrDuration = ParseDuration(GetCsvVal(csv, "ivr_duration", "ivr", "ivr_time", "ivr_dur", "ivrdur"));
+            parsed.QueueDuration = ParseDuration(GetCsvVal(csv, "queue_duration", "queue", "queue_wait", "wait_time", "queue_durn", "queuedurn"));
+            parsed.AgentDuration = ParseDuration(GetCsvVal(csv, "agent_duration", "agent_time", "talk_time", "duration", "agent_durn", "agentdurn"));
+            parsed.HoldDuration = ParseDuration(GetCsvVal(csv, "hold_duration", "hold", "hold_time", "hold_durn", "holddurn"));
 
-            string totalDurStr = GetCsvVal(csv, "total_duration", "total_time", "call_duration");
+            string totalDurStr = GetCsvVal(csv, "total_duration", "total_time", "call_duration", "durn");
             if (!string.IsNullOrWhiteSpace(totalDurStr))
             {
                 parsed.TotalDuration = ParseDuration(totalDurStr);
@@ -612,11 +632,11 @@ namespace BeneficiaryGrievance.Api.Services.Inbound
             }
 
             // Call End
-            string callEndRaw = CleanCell(GetCsvVal(csv, "call_end", "callend", "termination_point", "end_point", "call_status"));
+            string callEndRaw = CleanCell(GetCsvVal(csv, "call_end", "callend", "termination_point", "end_point", "call_status", "call_end_at", "callendat"));
             parsed.CallEnd = NormalizeCallEnd(callEndRaw, parsed.AgentDuration);
 
             // Agent ID
-            string agentRaw = CleanCell(GetCsvVal(csv, "agent_id", "agent", "staff_id", "executive_id"));
+            string agentRaw = CleanCell(GetCsvVal(csv, "agent_id", "agent", "staff_id", "executive_id", "agentid"));
             parsed.AgentId = string.IsNullOrWhiteSpace(agentRaw) || parsed.CallEnd != "Agent" ? "-" : agentRaw;
 
             // Call Type & ACD

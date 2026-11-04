@@ -21,6 +21,9 @@ builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseSqlServer(connectionString);
 });
 
+// 1.1 In-Memory Caching for High-Frequency Read Operations (Filters & Lookups)
+builder.Services.AddMemoryCache();
+
 // 2. Application Services
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IImportService, ImportService>();

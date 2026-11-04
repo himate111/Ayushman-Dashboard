@@ -216,10 +216,11 @@ namespace BeneficiaryGrievance.Api.Data.Inbound
                     AVG(DATEDIFF(SECOND, CAST('00:00:00' AS time), total_duration)) AS avgCallDurationSeconds,
                     AVG(DATEDIFF(SECOND, CAST('00:00:00' AS time), agent_duration)) AS avgAgentDurationSeconds,
                     AVG(DATEDIFF(SECOND, CAST('00:00:00' AS time), queue_duration)) AS avgQueueDurationSeconds
-                FROM dbo.inbound_calls
+                FROM dbo.inbound_calls WITH (NOLOCK)
                 {whereSql}";
 
             using var cmd = new SqlCommand(queryText, connection);
+            cmd.CommandTimeout = 60;
             foreach (var p in parameters) cmd.Parameters.Add(p);
 
             using var reader = await cmd.ExecuteReaderAsync();
@@ -264,12 +265,13 @@ namespace BeneficiaryGrievance.Api.Data.Inbound
             var groupExpression = $"COALESCE(NULLIF({selectExpression}, ''), 'Unknown')";
             var queryText = $@"
                 SELECT {topSql}{groupExpression} AS name, COUNT(*) AS value
-                FROM dbo.inbound_calls
+                FROM dbo.inbound_calls WITH (NOLOCK)
                 {whereSql}
                 GROUP BY {groupExpression}
                 ORDER BY {orderBy}";
 
             using var cmd = new SqlCommand(queryText, connection);
+            cmd.CommandTimeout = 60;
             foreach (var p in parameters) cmd.Parameters.Add(p);
 
             var list = new List<ChartNameValueDto>();
@@ -294,12 +296,13 @@ namespace BeneficiaryGrievance.Api.Data.Inbound
 
             var queryText = $@"
                 SELECT COALESCE(NULLIF(shift, ''), 'Unknown') AS name, SUM(CASE WHEN {metricSql} THEN 1 ELSE 0 END) AS value
-                FROM dbo.inbound_calls
+                FROM dbo.inbound_calls WITH (NOLOCK)
                 {whereSql}
                 GROUP BY COALESCE(NULLIF(shift, ''), 'Unknown')
                 ORDER BY name";
 
             using var cmd = new SqlCommand(queryText, connection);
+            cmd.CommandTimeout = 60;
             foreach (var p in parameters) cmd.Parameters.Add(p);
 
             var list = new List<ChartNameValueDto>();
@@ -322,23 +325,25 @@ namespace BeneficiaryGrievance.Api.Data.Inbound
             using var connection = CreateConnection();
             await connection.OpenAsync();
 
-            var orderSql = direction.Equals("top", StringComparison.OrdinalIgnoreCase)
-                ? "totalCalls DESC"
-                : "totalCalls ASC";
+            var isAll = direction.Equals("all", StringComparison.OrdinalIgnoreCase);
+            var isBottom = direction.Equals("bottom", StringComparison.OrdinalIgnoreCase);
+            var orderSql = isBottom ? "totalCalls ASC" : "totalCalls DESC";
+            var topSql = isAll ? "" : "TOP (10)";
 
             var queryText = $@"
-                SELECT TOP (10)
+                SELECT {topSql}
                     agent_id AS agent,
                     COUNT(*) AS totalCalls,
                     SUM(CASE WHEN {AgentDurationConnectedSql} THEN 1 ELSE 0 END) AS connectedCalls,
                     ROUND((100.0 * SUM(CASE WHEN {AgentDurationConnectedSql} THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0)), 2) AS connectionRate,
                     AVG(DATEDIFF(SECOND, CAST('00:00:00' AS time), agent_duration)) AS avgAgentDurationSeconds
-                FROM dbo.inbound_calls
+                FROM dbo.inbound_calls WITH (NOLOCK)
                 {whereSql}
                 GROUP BY agent_id
                 ORDER BY {orderSql}";
 
             using var cmd = new SqlCommand(queryText, connection);
+            cmd.CommandTimeout = 60;
             foreach (var p in parameters) cmd.Parameters.Add(p);
 
             var list = new List<AgentPerformanceDto>();
@@ -375,12 +380,13 @@ namespace BeneficiaryGrievance.Api.Data.Inbound
                 SELECT
                     YEAR(call_time) AS name,
                     COUNT(*) AS value
-                FROM dbo.inbound_calls
+                FROM dbo.inbound_calls WITH (NOLOCK)
                 {whereSql}
                 GROUP BY YEAR(call_time)
                 ORDER BY YEAR(call_time)";
 
             using var cmd = new SqlCommand(queryText, connection);
+            cmd.CommandTimeout = 60;
             foreach (var p in parameters) cmd.Parameters.Add(p);
 
             var list = new List<ChartNameValueDto>();
@@ -408,12 +414,13 @@ namespace BeneficiaryGrievance.Api.Data.Inbound
                     SUM(CASE WHEN {AgentDurationConnectedSql} THEN 1 ELSE 0 END) AS connected,
                     SUM(CASE WHEN {AgentDurationAbandonedSql} THEN 1 ELSE 0 END) AS abandoned,
                     SUM(CASE WHEN {AgentDurationUnclassifiedSql} THEN 1 ELSE 0 END) AS others
-                FROM dbo.inbound_calls
+                FROM dbo.inbound_calls WITH (NOLOCK)
                 {whereSql}
                 GROUP BY YEAR(call_time), MONTH(call_time)
                 ORDER BY YEAR(call_time), MONTH(call_time)";
 
             using var cmd = new SqlCommand(queryText, connection);
+            cmd.CommandTimeout = 60;
             foreach (var p in parameters) cmd.Parameters.Add(p);
 
             var list = new List<MonthlyCallsDto>();
@@ -456,12 +463,13 @@ namespace BeneficiaryGrievance.Api.Data.Inbound
                     SUM(CASE WHEN {AgentDurationConnectedSql} THEN 1 ELSE 0 END) AS connectedCalls,
                     SUM(CASE WHEN {AgentDurationAbandonedSql} THEN 1 ELSE 0 END) AS notConnectedCalls,
                     ROUND((100.0 * SUM(CASE WHEN {AgentDurationAbandonedSql} THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0)), 2) AS dropRate
-                FROM dbo.inbound_calls
+                FROM dbo.inbound_calls WITH (NOLOCK)
                 {whereSql}
                 GROUP BY call_hour
                 ORDER BY call_hour";
 
             using var cmd = new SqlCommand(queryText, connection);
+            cmd.CommandTimeout = 60;
             foreach (var p in parameters) cmd.Parameters.Add(p);
 
             var hourlyMap = new Dictionary<int, HourlyMetricsDto>();
@@ -522,12 +530,13 @@ namespace BeneficiaryGrievance.Api.Data.Inbound
                     SUM(CASE WHEN {AgentDurationConnectedSql} THEN 1 ELSE 0 END) AS connectedCalls,
                     SUM(CASE WHEN {AgentDurationAbandonedSql} THEN 1 ELSE 0 END) AS abandonedCalls,
                     SUM(CASE WHEN {AgentDurationUnclassifiedSql} THEN 1 ELSE 0 END) AS unclassifiedCalls
-                FROM dbo.inbound_calls
+                FROM dbo.inbound_calls WITH (NOLOCK)
                 {whereSql}
                 GROUP BY COALESCE(NULLIF(shift, ''), 'Unknown')
                 ORDER BY name";
 
             using var cmd = new SqlCommand(queryText, connection);
+            cmd.CommandTimeout = 60;
             foreach (var p in parameters) cmd.Parameters.Add(p);
 
             var list = new List<SummaryShiftMetric>();
@@ -575,10 +584,11 @@ namespace BeneficiaryGrievance.Api.Data.Inbound
                     SUM(CASE WHEN {SafeAgentDurationSecondsSql} IS NOT NULL AND total_duration IS NOT NULL AND DATEDIFF(SECOND, CAST('00:00:00' AS time), agent_duration) > DATEDIFF(SECOND, CAST('00:00:00' AS time), total_duration) THEN 1 ELSE 0 END) AS agentDurationExceedsTotalCount,
                     SUM(CASE WHEN {AgentDurationAbandonedSql} AND call_end = 'Agent' THEN 1 ELSE 0 END) AS durationAbandonedAgentEndCount,
                     SUM(CASE WHEN {AgentDurationConnectedSql} AND (call_end IS NULL OR call_end <> 'Agent') THEN 1 ELSE 0 END) AS durationConnectedNonAgentEndCount
-                FROM dbo.inbound_calls
+                FROM dbo.inbound_calls WITH (NOLOCK)
                 {whereSql}";
 
             using var cmd = new SqlCommand(queryText, connection);
+            cmd.CommandTimeout = 60;
             foreach (var p in parameters) cmd.Parameters.Add(p);
 
             using var reader = await cmd.ExecuteReaderAsync();
@@ -621,20 +631,29 @@ namespace BeneficiaryGrievance.Api.Data.Inbound
             using var connection = CreateConnection();
             await connection.OpenAsync();
 
-            // Years
-            using (var cmd = new SqlCommand("SELECT DISTINCT YEAR(call_time) AS value FROM dbo.inbound_calls WHERE call_time IS NOT NULL ORDER BY value DESC", connection))
-            using (var reader = await cmd.ExecuteReaderAsync())
+            const string sql = @"
+                SELECT DISTINCT YEAR(call_time) AS value FROM dbo.inbound_calls WITH (NOLOCK) WHERE call_time IS NOT NULL ORDER BY value DESC;
+                SELECT DISTINCT MONTH(call_time) AS value FROM dbo.inbound_calls WITH (NOLOCK) WHERE call_time IS NOT NULL ORDER BY value;
+                SELECT DISTINCT group_name AS value FROM dbo.inbound_calls WITH (NOLOCK) WHERE group_name <> '' ORDER BY value;
+                SELECT DISTINCT agent_id AS value FROM dbo.inbound_calls WITH (NOLOCK) WHERE agent_id <> '' ORDER BY value;
+                SELECT DISTINCT disposition AS value FROM dbo.inbound_calls WITH (NOLOCK) WHERE disposition <> '' ORDER BY value;
+                SELECT DISTINCT sub_disposition AS value FROM dbo.inbound_calls WITH (NOLOCK) WHERE sub_disposition <> '' ORDER BY value;
+                SELECT DISTINCT shift AS value FROM dbo.inbound_calls WITH (NOLOCK) WHERE shift <> '' ORDER BY value;
+            ";
+
+            using var cmd = new SqlCommand(sql, connection);
+            cmd.CommandTimeout = 60;
+            using var reader = await cmd.ExecuteReaderAsync();
+
+            // 1. Years
+            while (await reader.ReadAsync())
             {
-                while (await reader.ReadAsync())
-                {
-                    if (!reader.IsDBNull(0))
-                        res.Years.Add(Convert.ToInt32(reader.GetValue(0)));
-                }
+                if (!reader.IsDBNull(0))
+                    res.Years.Add(Convert.ToInt32(reader.GetValue(0)));
             }
 
-            // Months
-            using (var cmd = new SqlCommand("SELECT DISTINCT MONTH(call_time) AS value FROM dbo.inbound_calls WHERE call_time IS NOT NULL ORDER BY value", connection))
-            using (var reader = await cmd.ExecuteReaderAsync())
+            // 2. Months
+            if (await reader.NextResultAsync())
             {
                 while (await reader.ReadAsync())
                 {
@@ -643,9 +662,8 @@ namespace BeneficiaryGrievance.Api.Data.Inbound
                 }
             }
 
-            // Groups
-            using (var cmd = new SqlCommand("SELECT DISTINCT group_name AS value FROM dbo.inbound_calls WHERE group_name <> '' ORDER BY value", connection))
-            using (var reader = await cmd.ExecuteReaderAsync())
+            // 3. Groups
+            if (await reader.NextResultAsync())
             {
                 while (await reader.ReadAsync())
                 {
@@ -654,9 +672,8 @@ namespace BeneficiaryGrievance.Api.Data.Inbound
                 }
             }
 
-            // Agents
-            using (var cmd = new SqlCommand("SELECT DISTINCT agent_id AS value FROM dbo.inbound_calls WHERE agent_id <> '' ORDER BY value", connection))
-            using (var reader = await cmd.ExecuteReaderAsync())
+            // 4. Agents
+            if (await reader.NextResultAsync())
             {
                 while (await reader.ReadAsync())
                 {
@@ -665,9 +682,8 @@ namespace BeneficiaryGrievance.Api.Data.Inbound
                 }
             }
 
-            // Dispositions
-            using (var cmd = new SqlCommand("SELECT DISTINCT disposition AS value FROM dbo.inbound_calls WHERE disposition <> '' ORDER BY value", connection))
-            using (var reader = await cmd.ExecuteReaderAsync())
+            // 5. Dispositions
+            if (await reader.NextResultAsync())
             {
                 while (await reader.ReadAsync())
                 {
@@ -676,9 +692,8 @@ namespace BeneficiaryGrievance.Api.Data.Inbound
                 }
             }
 
-            // SubDispositions
-            using (var cmd = new SqlCommand("SELECT DISTINCT sub_disposition AS value FROM dbo.inbound_calls WHERE sub_disposition <> '' ORDER BY value", connection))
-            using (var reader = await cmd.ExecuteReaderAsync())
+            // 6. SubDispositions
+            if (await reader.NextResultAsync())
             {
                 while (await reader.ReadAsync())
                 {
@@ -687,9 +702,8 @@ namespace BeneficiaryGrievance.Api.Data.Inbound
                 }
             }
 
-            // Shifts
-            using (var cmd = new SqlCommand("SELECT DISTINCT shift AS value FROM dbo.inbound_calls WHERE shift <> '' ORDER BY value", connection))
-            using (var reader = await cmd.ExecuteReaderAsync())
+            // 7. Shifts
+            if (await reader.NextResultAsync())
             {
                 while (await reader.ReadAsync())
                 {
@@ -863,7 +877,7 @@ namespace BeneficiaryGrievance.Api.Data.Inbound
                     SUM(CASE WHEN {AgentDurationAbandonedSql} THEN 1 ELSE 0 END) AS abandonedCount,
                     AVG(DATEDIFF(SECOND, CAST('00:00:00' AS time), agent_duration)) AS avgTalkSeconds,
                     AVG(DATEDIFF(SECOND, CAST('00:00:00' AS time), queue_duration)) AS avgQueueSeconds
-                FROM dbo.inbound_calls
+                FROM dbo.inbound_calls WITH (NOLOCK)
                 {whereSql};";
 
             var querySql = $@"
@@ -871,7 +885,7 @@ namespace BeneficiaryGrievance.Api.Data.Inbound
                 SELECT id, did_no, group_name, called_no, call_time,
                        ring_duration, ivr_duration, queue_duration, agent_duration, hold_duration, total_duration,
                        call_end, agent_id, call_type, acd, disposition, sub_disposition, shift, call_hour
-                FROM dbo.inbound_calls
+                FROM dbo.inbound_calls WITH (NOLOCK)
                 {whereSql}
                 ORDER BY {sortCol} {sortDir}, id DESC
                 OFFSET @p_offset ROWS FETCH NEXT @p_pageSize ROWS ONLY;";
@@ -928,14 +942,14 @@ namespace BeneficiaryGrievance.Api.Data.Inbound
                 SELECT TOP 1 id, did_no, group_name, called_no, call_time,
                        ring_duration, ivr_duration, queue_duration, agent_duration, hold_duration, total_duration,
                        call_end, agent_id, call_type, acd, disposition, sub_disposition, shift, call_hour
-                FROM dbo.inbound_calls
+                FROM dbo.inbound_calls WITH (NOLOCK)
                 WHERE id = @p_id;";
 
             using var connection = CreateConnection();
             await connection.OpenAsync();
 
             using var cmd = new SqlCommand(sql, connection);
-            cmd.CommandTimeout = 15;
+            cmd.CommandTimeout = 60;
             cmd.Parameters.Add(new SqlParameter("@p_id", SqlDbType.BigInt) { Value = id });
 
             using var reader = await cmd.ExecuteReaderAsync();
@@ -1076,7 +1090,7 @@ namespace BeneficiaryGrievance.Api.Data.Inbound
                                OR (call_end = 'Agent' AND (disposition IS NULL OR LTRIM(RTRIM(disposition)) IN ('', '-')))
                                OR (call_end = 'Agent' AND (sub_disposition IS NULL OR LTRIM(RTRIM(sub_disposition)) IN ('', '-')))
                              THEN 1 ELSE 0 END) AS unique_confirmed_issues
-                FROM dbo.inbound_calls
+                FROM dbo.inbound_calls WITH (NOLOCK)
                 {whereSql};";
 
             using var cmd = new SqlCommand(querySql, connection);
@@ -1188,7 +1202,7 @@ namespace BeneficiaryGrievance.Api.Data.Inbound
                     SUM(CASE WHEN agent_id IS NOT NULL AND LTRIM(RTRIM(agent_id)) NOT IN ('', '-') THEN 1 ELSE 0 END) AS complete_agent_id,
                     SUM(CASE WHEN disposition IS NOT NULL AND LTRIM(RTRIM(disposition)) NOT IN ('', '-') THEN 1 ELSE 0 END) AS complete_disp,
                     SUM(CASE WHEN sub_disposition IS NOT NULL AND LTRIM(RTRIM(sub_disposition)) NOT IN ('', '-') THEN 1 ELSE 0 END) AS complete_sub_disp
-                FROM dbo.inbound_calls
+                FROM dbo.inbound_calls WITH (NOLOCK)
                 {whereSql};";
 
             using var cmd = new SqlCommand(querySql, connection);
@@ -1259,7 +1273,7 @@ namespace BeneficiaryGrievance.Api.Data.Inbound
                     SUM(CASE WHEN call_end = 'Agent' AND (disposition IS NULL OR LTRIM(RTRIM(disposition)) IN ('', '-')) THEN 1 ELSE 0 END) AS missing_outcomes,
                     SUM(CASE WHEN call_end = 'Agent' AND (sub_disposition IS NULL OR LTRIM(RTRIM(sub_disposition)) IN ('', '-')) THEN 1 ELSE 0 END) AS missing_reasons,
                     SUM(CASE WHEN call_end = 'Agent' AND (agent_id IS NULL OR LTRIM(RTRIM(agent_id)) IN ('', '-')) THEN 1 ELSE 0 END) AS missing_agents
-                FROM dbo.inbound_calls
+                FROM dbo.inbound_calls WITH (NOLOCK)
                 {(string.IsNullOrWhiteSpace(whereSql) ? "WHERE call_time IS NOT NULL" : whereSql + " AND call_time IS NOT NULL")}
                 GROUP BY YEAR(call_time), MONTH(call_time)
                 ORDER BY yr, mo;";
@@ -1323,7 +1337,7 @@ namespace BeneficiaryGrievance.Api.Data.Inbound
                     SUM(CASE WHEN call_end = 'Queue' AND DATEDIFF(SECOND, '00:00:00', agent_duration) >= 3 THEN 1 ELSE 0 END) AS queue_with_talk,
                     SUM(CASE WHEN call_end = 'IVR' THEN 1 ELSE 0 END) AS ivr_total,
                     SUM(CASE WHEN call_end = 'IVR' AND DATEDIFF(SECOND, '00:00:00', agent_duration) >= 3 THEN 1 ELSE 0 END) AS ivr_with_talk
-                FROM dbo.inbound_calls
+                FROM dbo.inbound_calls WITH (NOLOCK)
                 {whereSql};";
 
             using var cmd = new SqlCommand(querySql, connection);
@@ -1403,13 +1417,13 @@ namespace BeneficiaryGrievance.Api.Data.Inbound
 
             var finalWhere = whereClauses.Count > 0 ? "WHERE " + string.Join(" AND ", whereClauses) : "";
 
-            var countSql = $"SELECT COUNT(*) FROM dbo.inbound_calls {finalWhere};";
+            var countSql = $"SELECT COUNT(*) FROM dbo.inbound_calls WITH (NOLOCK) {finalWhere};";
             var querySql = $@"
                 {countSql}
                 SELECT id, did_no, group_name, called_no, call_time,
                        ring_duration, ivr_duration, queue_duration, agent_duration, hold_duration, total_duration,
                        call_end, agent_id, call_type, acd, disposition, sub_disposition, shift, call_hour
-                FROM dbo.inbound_calls
+                FROM dbo.inbound_calls WITH (NOLOCK)
                 {finalWhere}
                 ORDER BY {sortCol} {sortDir}, id DESC
                 OFFSET @p_offset ROWS FETCH NEXT @p_pageSize ROWS ONLY;";

@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Logging;
 using BeneficiaryGrievance.Api.Data.Inbound;
 using BeneficiaryGrievance.Api.DTOs.Inbound;
 
@@ -10,10 +13,18 @@ namespace BeneficiaryGrievance.Api.Services.Inbound
     public class InboundDashboardService : IInboundDashboardService
     {
         private readonly IInboundRepository _repository;
+        private readonly IMemoryCache _cache;
+        private readonly ILogger<InboundDashboardService> _logger;
+        public const string FilterOptionsCacheKey = "InboundFilterOptions";
 
-        public InboundDashboardService(IInboundRepository repository)
+        public InboundDashboardService(
+            IInboundRepository repository,
+            IMemoryCache cache,
+            ILogger<InboundDashboardService> logger)
         {
             _repository = repository;
+            _cache = cache;
+            _logger = logger;
         }
 
         private static bool IsPlaceholder(string? value)
@@ -24,39 +35,57 @@ namespace BeneficiaryGrievance.Api.Services.Inbound
 
         public async Task<InboundDashboardResponseDto> GetDashboardAsync(InboundFilterDto filter)
         {
+            var sw = Stopwatch.StartNew();
+
+            // Consolidate redundant queries:
+            // 1. Shift metrics query produces shifts, connectedByShift, notConnectedByShift, and summary shift metrics in 1 scan.
+            // 2. Single agent query ("all") produces both top 10 and bottom 10 agents in 1 scan.
             var kpisTask = _repository.GetKpisAsync(filter);
             var callEndTask = _repository.GetGroupedChartAsync("call_end", filter);
             var dispositionsTask = _repository.GetGroupedChartAsync("disposition", filter);
             var groupsTask = _repository.GetGroupedChartAsync("group_name", filter);
-            var shiftsTask = _repository.GetGroupedChartAsync("shift", filter, orderBy: "name ASC");
-            var connectedByShiftTask = _repository.GetShiftMetricChartAsync(filter, InboundRepository.AgentDurationConnectedSql);
-            var notConnectedByShiftTask = _repository.GetShiftMetricChartAsync(filter, InboundRepository.AgentDurationAbandonedSql);
             var topSubDispositionsTask = _repository.GetGroupedChartAsync("sub_disposition", filter, limit: 5);
-            var topAgentsTask = _repository.GetAgentAnalyticsAsync(filter, "top");
-            var bottomAgentsTask = _repository.GetAgentAnalyticsAsync(filter, "bottom");
+            var allAgentsTask = _repository.GetAgentAnalyticsAsync(filter, "all");
             var callsByYearTask = _repository.GetCallsByYearAsync(filter);
             var callsByMonthTask = _repository.GetCallsByMonthAsync(filter);
             var hourlyTask = _repository.GetHourlyAsync(filter);
+            var shiftMetricsTask = _repository.GetSummaryShiftMetricsAsync(filter);
+            var dataQualityTask = _repository.GetDataQualityMetricsAsync(filter);
 
             await Task.WhenAll(
-                kpisTask, callEndTask, dispositionsTask, groupsTask, shiftsTask,
-                connectedByShiftTask, notConnectedByShiftTask, topSubDispositionsTask,
-                topAgentsTask, bottomAgentsTask, callsByYearTask, callsByMonthTask, hourlyTask
+                kpisTask, callEndTask, dispositionsTask, groupsTask, topSubDispositionsTask,
+                allAgentsTask, callsByYearTask, callsByMonthTask, hourlyTask,
+                shiftMetricsTask, dataQualityTask
             );
 
             var kpis = await kpisTask;
             var callEnd = await callEndTask;
             var dispositions = await dispositionsTask;
             var groups = await groupsTask;
-            var shifts = await shiftsTask;
-            var connectedByShift = await connectedByShiftTask;
-            var notConnectedByShift = await notConnectedByShiftTask;
             var topSubDispositions = await topSubDispositionsTask;
-            var topAgents = await topAgentsTask;
-            var bottomAgents = await bottomAgentsTask;
+            var allAgents = await allAgentsTask;
             var callsByYear = await callsByYearTask;
             var callsByMonth = await callsByMonthTask;
             var hourly = await hourlyTask;
+            var shiftMetrics = await shiftMetricsTask;
+            var dataQuality = await dataQualityTask;
+
+            // Derive Top 10 and Bottom 10 from the single agent query
+            var topAgents = allAgents.Take(10).ToList();
+            var bottomAgents = allAgents.OrderBy(a => a.TotalCalls).Take(10).ToList();
+
+            // Derive shifts, connectedByShift, and notConnectedByShift from the single shift query
+            // Sorted by name ASC matching original shift chart specification
+            var orderedShiftMetrics = shiftMetrics.OrderBy(s => s.Name).ToList();
+            var shifts = orderedShiftMetrics
+                .Select(s => new ChartNameValueDto { Name = s.Name, Value = s.TotalCalls })
+                .ToList();
+            var connectedByShift = orderedShiftMetrics
+                .Select(s => new ChartNameValueDto { Name = s.Name, Value = s.ConnectedCalls })
+                .ToList();
+            var notConnectedByShift = orderedShiftMetrics
+                .Select(s => new ChartNameValueDto { Name = s.Name, Value = s.AbandonedCalls })
+                .ToList();
 
             var charts = new InboundChartsDto
             {
@@ -74,12 +103,9 @@ namespace BeneficiaryGrievance.Api.Services.Inbound
                 CallsByMonth = callsByMonth
             };
 
-            var shiftMetricsTask = _repository.GetSummaryShiftMetricsAsync(filter);
-            var dataQualityTask = _repository.GetDataQualityMetricsAsync(filter);
-            await Task.WhenAll(shiftMetricsTask, dataQualityTask);
-
-            var shiftMetrics = await shiftMetricsTask;
-            var dataQuality = await dataQualityTask;
+            sw.Stop();
+            _logger.LogInformation("Inbound dashboard telemetry loaded in {ElapsedMs} ms for {TotalCalls} calls",
+                sw.ElapsedMilliseconds, kpis.TotalCalls);
 
             var peakHour = hourly.OrderByDescending(h => h.TotalCalls).FirstOrDefault();
             var peakHourShare = kpis.TotalCalls > 0 && peakHour != null
@@ -130,9 +156,21 @@ namespace BeneficiaryGrievance.Api.Services.Inbound
             };
         }
 
-        public Task<InboundFiltersResponseDto> GetFilterValuesAsync()
+        public async Task<InboundFiltersResponseDto> GetFilterValuesAsync()
         {
-            return _repository.GetFilterValuesAsync();
+            if (_cache.TryGetValue(FilterOptionsCacheKey, out InboundFiltersResponseDto? cached) && cached != null)
+            {
+                _logger.LogDebug("Returning cached Inbound filter options");
+                return cached;
+            }
+
+            var sw = Stopwatch.StartNew();
+            var fresh = await _repository.GetFilterValuesAsync();
+            sw.Stop();
+
+            _cache.Set(FilterOptionsCacheKey, fresh, TimeSpan.FromHours(1));
+            _logger.LogInformation("Fetched and cached Inbound filter options in {ElapsedMs} ms", sw.ElapsedMilliseconds);
+            return fresh;
         }
 
         public Task<InboundKpiDto> GetKpisAsync(InboundFilterDto filter)
@@ -192,13 +230,11 @@ namespace BeneficiaryGrievance.Api.Services.Inbound
 
         public async Task<AgentAnalyticsDto> GetAgentAnalyticsAsync(InboundFilterDto filter)
         {
-            var topTask = _repository.GetAgentAnalyticsAsync(filter, "top");
-            var bottomTask = _repository.GetAgentAnalyticsAsync(filter, "bottom");
-            await Task.WhenAll(topTask, bottomTask);
+            var allAgents = await _repository.GetAgentAnalyticsAsync(filter, "all");
             return new AgentAnalyticsDto
             {
-                TopAgents = await topTask,
-                BottomAgents = await bottomTask
+                TopAgents = allAgents.Take(10).ToList(),
+                BottomAgents = allAgents.OrderBy(a => a.TotalCalls).Take(10).ToList()
             };
         }
 
