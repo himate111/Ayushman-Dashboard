@@ -19,6 +19,7 @@ import {
   Settings,
   Shield,
   LogOut,
+  LogIn,
   User,
   Lightbulb
 } from 'lucide-react';
@@ -44,6 +45,16 @@ const INBOUND_MENU_ITEMS = [
   { id: 'settings', label: 'System Settings', icon: Settings, available: true },
 ];
 
+const OUTBOUND_MENU_ITEMS = [
+  { id: 'dashboard', label: 'Executive Dashboard', icon: LayoutDashboard, available: true },
+  { id: 'insights', label: 'Insights Explorer', icon: Lightbulb, available: true },
+  { id: 'upload', label: 'Upload Call Records', icon: UploadCloud, available: true },
+  { id: 'history', label: 'Upload History', icon: History, available: true },
+  { id: 'explorer', label: 'Call Records Explorer', icon: Search, available: true },
+  { id: 'quality', label: 'Data Quality & Audit', icon: CheckCircle2, available: true },
+  { id: 'settings', label: 'System Settings', icon: Settings, available: true },
+];
+
 export default function Sidebar({ 
   activeModule = 'grievance', 
   onSelectModule, 
@@ -52,10 +63,14 @@ export default function Sidebar({
   user, 
   onLogout 
 }) {
-  const userInitial = (user?.username || 'A')[0].toUpperCase();
-  const displayRole = user?.role || 'Administrator';
-  const displayUsername = user?.username || 'admin';
-  const menuItems = activeModule === 'inbound' ? INBOUND_MENU_ITEMS : GRIEVANCE_MENU_ITEMS;
+  const userInitial = ((user?.username || (user ? 'A' : '?'))[0] || '?').toUpperCase();
+  const displayRole = user?.role || (user ? 'Administrator' : 'Sign In Required');
+  const displayUsername = user?.username || (user ? 'admin' : 'Guest');
+  const menuItems = activeModule === 'inbound' 
+    ? INBOUND_MENU_ITEMS 
+    : activeModule === 'outbound' 
+    ? OUTBOUND_MENU_ITEMS 
+    : GRIEVANCE_MENU_ITEMS;
 
   return (
     <Box
@@ -397,21 +412,40 @@ export default function Sidebar({
             </Box>
           </Box>
 
-          {onLogout && (
-            <Tooltip title="Log Out" placement="top">
+          {user ? (
+            onLogout && (
+              <Tooltip title="Log Out" placement="top">
+                <IconButton
+                  onClick={onLogout}
+                  size="small"
+                  aria-label="Log Out"
+                  sx={{
+                    color: '#94A3B8',
+                    p: 0.5,
+                    flexShrink: 0,
+                    transition: 'all 0.15s ease',
+                    '&:hover': { color: '#EF4444', bgcolor: '#FEF2F2' },
+                  }}
+                >
+                  <LogOut size={15} />
+                </IconButton>
+              </Tooltip>
+            )
+          ) : (
+            <Tooltip title="Sign In" placement="top">
               <IconButton
-                onClick={onLogout}
+                onClick={() => window.dispatchEvent(new CustomEvent('auth:unauthorized'))}
                 size="small"
-                aria-label="Log Out"
+                aria-label="Sign In"
                 sx={{
-                  color: '#94A3B8',
+                  color: '#0284C7',
                   p: 0.5,
                   flexShrink: 0,
                   transition: 'all 0.15s ease',
-                  '&:hover': { color: '#EF4444', bgcolor: '#FEF2F2' },
+                  '&:hover': { color: '#0369A1', bgcolor: '#F0F9FF' },
                 }}
               >
-                <LogOut size={15} />
+                <LogIn size={15} />
               </IconButton>
             </Tooltip>
           )}

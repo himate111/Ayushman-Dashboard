@@ -15,18 +15,30 @@ import { Shield, Lock, User } from 'lucide-react';
 import { login } from '../api/authApi';
 
 export default function LoginModal({ open, onClose, onLoginSuccess }) {
-  const [username, setUsername] = useState('admin');
-  const [password, setPassword] = useState('Admin@123');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
 
+  // Clear inputs and error on modal open/close
+  React.useEffect(() => {
+    if (open) {
+      setError(null);
+      setPassword('');
+    }
+  }, [open]);
+
   const handleSubmit = async (e) => {
     if (e) e.preventDefault();
+    if (!username.trim() || !password) {
+      setError('Please enter both username and password.');
+      return;
+    }
     setError(null);
     setLoading(true);
 
     try {
-      const res = await login(username, password);
+      const res = await login(username.trim(), password);
       if (res && res.token) {
         localStorage.setItem('token', res.token);
         localStorage.setItem('user', JSON.stringify({
@@ -35,6 +47,7 @@ export default function LoginModal({ open, onClose, onLoginSuccess }) {
           role: res.role,
           email: res.email
         }));
+        setPassword('');
         if (onLoginSuccess) {
           onLoginSuccess({
             username: res.username,
@@ -105,6 +118,8 @@ export default function LoginModal({ open, onClose, onLoginSuccess }) {
               label="Username"
               size="small"
               fullWidth
+              autoComplete="username"
+              autoFocus
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               InputProps={{
@@ -121,6 +136,7 @@ export default function LoginModal({ open, onClose, onLoginSuccess }) {
               type="password"
               size="small"
               fullWidth
+              autoComplete="current-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               InputProps={{
@@ -133,7 +149,7 @@ export default function LoginModal({ open, onClose, onLoginSuccess }) {
             />
 
             <Typography variant="caption" sx={{ color: '#94A3B8', fontSize: '0.72rem' }}>
-              Configured demo users: <b>admin</b> (Admin) or <b>director</b> (Executive)
+              Please enter your NHA authorized portal credentials to continue.
             </Typography>
           </Box>
         </DialogContent>

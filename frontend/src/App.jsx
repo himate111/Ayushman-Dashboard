@@ -21,6 +21,13 @@ const InboundUploadHistory = lazy(() => import('./modules/inbound/pages/InboundU
 const InboundCallRecordsExplorer = lazy(() => import('./modules/inbound/pages/InboundCallRecordsExplorer'));
 const InboundDataQualityAudit = lazy(() => import('./modules/inbound/pages/InboundDataQualityAudit'));
 
+// Lazy-load Outbound module
+const OutboundExecutiveDashboard = lazy(() => import('./modules/outbound/pages/OutboundExecutiveDashboard'));
+const OutboundInsightsExplorer = lazy(() => import('./modules/outbound/pages/OutboundInsightsExplorer'));
+const OutboundCallExplorerPage = lazy(() => import('./modules/outbound/pages/OutboundCallExplorerPage'));
+const OutboundUploadPage = lazy(() => import('./modules/outbound/pages/OutboundUploadPage'));
+const OutboundDataQualityAudit = lazy(() => import('./modules/outbound/pages/OutboundDataQualityAudit'));
+
 export default function App() {
   // Parse initial module & tab from URL with backward-compatibility
   const parseUrlRoute = () => {
@@ -34,11 +41,12 @@ export default function App() {
         return { module: 'inbound', tab: 'dashboard' };
       }
 
-      const validModules = ['grievance', 'inbound'];
+      const validModules = ['grievance', 'inbound', 'outbound'];
       const module = validModules.includes(moduleParam) ? moduleParam : 'grievance';
       const validGrievanceTabs = ['dashboard', 'insights', 'upload', 'history', 'explorer', 'quality', 'settings'];
       const validInboundTabs = ['dashboard', 'insights', 'upload', 'history', 'explorer', 'quality', 'settings'];
-      const validTabs = module === 'inbound' ? validInboundTabs : validGrievanceTabs;
+      const validOutboundTabs = ['dashboard', 'insights', 'upload', 'history', 'explorer', 'quality', 'settings'];
+      const validTabs = module === 'outbound' ? validOutboundTabs : module === 'inbound' ? validInboundTabs : validGrievanceTabs;
 
       return {
         module,
@@ -116,14 +124,95 @@ export default function App() {
     });
   };
 
+  // Global filters for Outbound Call Analytics (supports URL deep linking)
+  const parseOutboundUrlFilters = () => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const parseList = (key) => {
+        const val = params.get(key);
+        if (!val) return [];
+        return val.split(',').map((s) => s.trim()).filter(Boolean);
+      };
+      return {
+        year: parseList('year'),
+        month: parseList('month'),
+        startDate: params.get('startDate') || '',
+        endDate: params.get('endDate') || '',
+        groupName: parseList('groupName'),
+        agent: parseList('agent'),
+        disposition: parseList('disposition'),
+        subDisposition: parseList('subDisposition'),
+        shift: parseList('shift')
+      };
+    } catch {
+      return {
+        year: [],
+        month: [],
+        startDate: '',
+        endDate: '',
+        groupName: [],
+        agent: [],
+        disposition: [],
+        subDisposition: [],
+        shift: []
+      };
+    }
+  };
+
+  const [outboundFilters, setOutboundFilters] = useState(parseOutboundUrlFilters);
+
+  const handleOutboundFilterChange = (key, value) => {
+    setOutboundFilters((prev) => ({
+      ...prev,
+      [key]: value
+    }));
+  };
+
+  const handleOutboundResetFilters = () => {
+    setOutboundFilters({
+      year: [],
+      month: [],
+      startDate: '',
+      endDate: '',
+      groupName: [],
+      agent: [],
+      disposition: [],
+      subDisposition: [],
+      shift: []
+    });
+  };
+
   const [user, setUser] = useState(() => {
     try {
+      const token = localStorage.getItem('token');
       const saved = localStorage.getItem('user');
+      if (!token) return null;
       return saved ? JSON.parse(saved) : { username: 'admin', fullName: 'National Administrator', role: 'Administrator' };
     } catch {
-      return { username: 'admin', fullName: 'National Administrator', role: 'Administrator' };
+      return null;
     }
   });
+
+  // Listen for global unauthorized (401) events and prompt session re-login
+  useEffect(() => {
+    const handleUnauthorized = () => {
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+      setUser(null);
+      setIsLoginOpen(true);
+    };
+
+    window.addEventListener('auth:unauthorized', handleUnauthorized);
+    return () => window.removeEventListener('auth:unauthorized', handleUnauthorized);
+  }, []);
+
+  // Check token presence on initial load - if missing, prompt user to log in
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    if (!token) {
+      setIsLoginOpen(true);
+    }
+  }, []);
 
   // Sync state with browser back/forward buttons
   useEffect(() => {
@@ -191,6 +280,18 @@ export default function App() {
     updateUrl('inbound', 'insights', sectionKey);
   };
 
+  const handleNavigateToOutboundInsights = (sectionKey) => {
+    setRoute({ module: 'outbound', tab: 'insights' });
+    setTargetChart(sectionKey);
+    updateUrl('outbound', 'insights', sectionKey);
+  };
+
+  const handleNavigateToOutboundChart = (chartKey) => {
+    setRoute({ module: 'outbound', tab: 'dashboard' });
+    setTargetChart(chartKey);
+    updateUrl('outbound', 'dashboard', chartKey);
+  };
+
   const handleRefresh = () => {
     setIsRefreshing(true);
     setRefreshKey((prev) => prev + 1);
@@ -207,6 +308,7 @@ export default function App() {
   const handleLoginSuccess = (loggedInUser) => {
     setUser(loggedInUser);
     setIsLoginOpen(false);
+    window.dispatchEvent(new CustomEvent('auth:login'));
     setRefreshKey((prev) => prev + 1);
   };
 
@@ -446,6 +548,82 @@ export default function App() {
             }>
               <InboundDataQualityAudit key={`inbound-qual-${refreshKey}`} />
             </Suspense>
+          )}
+
+          {/* OUTBOUND CALL ANALYTICS MODULE */}
+          {activeModule === 'outbound' && activeTab === 'dashboard' && (
+            <Suspense fallback={
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '80vh' }}>
+                <CircularProgress size={36} sx={{ color: '#0284C7' }} />
+              </Box>
+            }>
+              <OutboundExecutiveDashboard
+                key={`outbound-dash-${refreshKey}`}
+                onNavigateToInsights={handleNavigateToOutboundInsights}
+                targetChart={targetChart}
+                filters={outboundFilters}
+                onFilterChange={handleOutboundFilterChange}
+                onResetFilters={handleOutboundResetFilters}
+              />
+            </Suspense>
+          )}
+
+          {activeModule === 'outbound' && activeTab === 'insights' && (
+            <Suspense fallback={
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '80vh' }}>
+                <CircularProgress size={36} sx={{ color: '#0284C7' }} />
+              </Box>
+            }>
+              <OutboundInsightsExplorer
+                key={`outbound-ins-${refreshKey}`}
+                targetSection={targetChart}
+                targetChart={targetChart}
+                onNavigateToDashboard={() => handleSelectTab('dashboard')}
+                onNavigateToChart={handleNavigateToOutboundChart}
+                filters={outboundFilters}
+                onFilterChange={handleOutboundFilterChange}
+                onResetFilters={handleOutboundResetFilters}
+              />
+            </Suspense>
+          )}
+
+          {activeModule === 'outbound' && activeTab === 'explorer' && (
+            <Suspense fallback={
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '80vh' }}>
+                <CircularProgress size={36} sx={{ color: '#0284C7' }} />
+              </Box>
+            }>
+              <OutboundCallExplorerPage key={`outbound-exp-${refreshKey}`} />
+            </Suspense>
+          )}
+
+          {activeModule === 'outbound' && (activeTab === 'upload' || activeTab === 'history') && (
+            <Suspense fallback={
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '80vh' }}>
+                <CircularProgress size={36} sx={{ color: '#0284C7' }} />
+              </Box>
+            }>
+              <OutboundUploadPage key={`outbound-upload-${refreshKey}`} />
+            </Suspense>
+          )}
+
+          {activeModule === 'outbound' && activeTab === 'quality' && (
+            <Suspense fallback={
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '80vh' }}>
+                <CircularProgress size={36} sx={{ color: '#0284C7' }} />
+              </Box>
+            }>
+              <OutboundDataQualityAudit
+                key={`outbound-qual-${refreshKey}`}
+                filters={outboundFilters}
+                onFilterChange={handleOutboundFilterChange}
+                onResetFilters={handleOutboundResetFilters}
+              />
+            </Suspense>
+          )}
+
+          {activeModule === 'outbound' && activeTab === 'settings' && (
+            <SettingsPage user={user} onOpenLogin={() => setIsLoginOpen(true)} />
           )}
         </Box>
       </Box>

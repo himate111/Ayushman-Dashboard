@@ -1,16 +1,26 @@
 using System.Text;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using BeneficiaryGrievance.Api.Data;
 using BeneficiaryGrievance.Api.Data.Inbound;
+using BeneficiaryGrievance.Api.Data.Outbound;
 using BeneficiaryGrievance.Api.Services;
 using BeneficiaryGrievance.Api.Services.Inbound;
+using BeneficiaryGrievance.Api.Services.Outbound;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// 0. Data Protection - Persist Keys in Workspace App_Data
+var keysFolder = Path.Combine(builder.Environment.ContentRootPath, "App_Data", "DataProtection-Keys");
+Directory.CreateDirectory(keysFolder);
+builder.Services.AddDataProtection()
+    .PersistKeysToFileSystem(new DirectoryInfo(keysFolder))
+    .SetApplicationName("BeneficiaryGrievanceApi");
 
 // 1. Database Connection
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection") 
@@ -34,6 +44,12 @@ builder.Services.AddScoped<IInboundImportRepository, InboundImportRepository>();
 builder.Services.AddScoped<IInboundImportService, InboundImportService>();
 builder.Services.AddScoped<IInboundDashboardService, InboundDashboardService>();
 builder.Services.AddScoped<BeneficiaryGrievance.Api.Services.Inbound.Audit.IInboundAuditService, BeneficiaryGrievance.Api.Services.Inbound.Audit.InboundAuditService>();
+
+// 2.1 Outbound Call Analytics Services
+builder.Services.AddScoped<IOutboundRepository, OutboundRepository>();
+builder.Services.AddScoped<IOutboundImportRepository, OutboundImportRepository>();
+builder.Services.AddScoped<IOutboundDashboardService, OutboundDashboardService>();
+builder.Services.AddScoped<IOutboundImportService, OutboundImportService>();
 
 // 3. Controllers and JSON serialization
 builder.Services.AddControllers()

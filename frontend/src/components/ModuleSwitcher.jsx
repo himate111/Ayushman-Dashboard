@@ -40,9 +40,8 @@ export const MODULES = [
     name: 'Outbound Call Analytics',
     shortName: 'Outbound',
     icon: PhoneOutgoing,
-    color: '#64748B',
-    available: false,
-    badge: 'Coming Soon',
+    color: '#0284C7',
+    available: true,
     description: 'Outbound campaigns & beneficiary follow-up'
   }
 ];
